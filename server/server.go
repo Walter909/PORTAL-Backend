@@ -37,6 +37,20 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
+// Allow only my computer origin to connect to server for now
+func checkOrigin(r *http.Request) bool {
+	// Get the origin from the request
+	origin := r.Header.Get("Origin")
+
+	// Replace this with your logic to check the origin
+	if origin != "http://localhost:3000" {
+		log.Printf("Origin %s not allowed\n", origin)
+		return false
+	}
+
+	return true
+}
+
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 func RandStringRunes(n int) string {
@@ -49,6 +63,7 @@ func RandStringRunes(n int) string {
 
 // Socket connection
 func (s Server) broadcast(w http.ResponseWriter, r *http.Request) {
+
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
@@ -193,6 +208,8 @@ func main() {
 	}
 
 	defer db.Close()
+
+	upgrader.CheckOrigin = checkOrigin
 
 	s := Server{db: db, connections: make(map[string]*websocket.Conn)}
 	CreateTables(db)

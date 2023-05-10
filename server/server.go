@@ -31,6 +31,17 @@ type Server struct {
 	connections map[string]*websocket.Conn
 }
 
+// JSON struct
+type Message struct {
+	Username  string `json:"username"`
+	Message   string `json:"message"`
+	ChannelId int64  `json:"channelId"`
+}
+
+type Instruction struct {
+	SetUsername string `json:"setUsername"`
+}
+
 // use default options
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -62,7 +73,7 @@ func RandStringRunes(n int) string {
 }
 
 // Socket connection
-func (s Server) broadcast(w http.ResponseWriter, r *http.Request) {
+func (s Server) socketHandler(w http.ResponseWriter, r *http.Request) {
 
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -76,24 +87,34 @@ func (s Server) broadcast(w http.ResponseWriter, r *http.Request) {
 	//Insert user connection
 	s.connections[username] = c
 
+	//send the current client username
+	c.WriteJSON(Instruction{SetUsername: username})
+
 	defer c.Close()
 	for {
-		_, message, err := c.ReadMessage()
+		var message Message
+
+		err := c.ReadJSON(&message)
 		if err != nil {
+			log.Printf("Error while reading json: %s", err.Error())
 			break
 		}
+
+		//set senders client username
+		message.Username = username
+
 		//Server message
 		log.Printf("receive: %s", message)
 
 		//statement := fmt.Sprintf("INSERT INTO messages(username,message,channelId) VALUES(\"%s\",\"%s\",1);", username, strings.TrimSpace(string(message)))
-		_, err = s.db.Exec("INSERT INTO messages(username,message,channelId) VALUES(?,?,1);", username, strings.TrimSpace(string(message)))
+		_, err = s.db.Exec("INSERT INTO messages(username,message,channelId) VALUES(?,?,1);", message.Username, strings.TrimSpace(message.Message))
 		if err != nil {
 			log.Printf("This is what happened %w", err)
 		}
 
 		for _, otherConn := range s.connections {
 			if otherConn != c {
-				err := otherConn.WriteMessage(websocket.TextMessage, message)
+				err := otherConn.WriteJSON(message)
 				if err != nil {
 					log.Printf("Failed to write message to connection: %s", err)
 				}
@@ -156,14 +177,6 @@ func CreateTables(db *sql.DB) {
 		log.Printf("Failed to create channels table %w", err)
 		return
 	}
-
-}
-
-// API endpoints
-type Message struct {
-	Username  string //`json:"username"`
-	Message   string //`json:"message"`
-	ChannelId int64  //`json:"channelId"`
 }
 
 func (s Server) getChannelMessages(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +184,7 @@ func (s Server) getChannelMessages(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.db.Query("SELECT username,message,channelId FROM messages WHERE channelId=?;", id)
 	if nil != err {
-		log.Printf("Failed to get channel messages%w", err)
+		log.Printf("Failed to get channel messages %s", err.Error())
 		return
 	}
 
@@ -196,8 +209,16 @@ func (s Server) getChannelMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(messages)
 }
+
+// func usernameHandler(w http.ResponseWriter, r *http.Request) {
+// 	// Generate a random username using the current timestamp and a random number
+
+// 	// Write the username to the response writer
+// 	log.Printf(w, "Your username is: %s", username)
+// }
 
 func main() {
 	db, err := sql.Open("sqlite3", file)
@@ -215,7 +236,7 @@ func main() {
 	CreateTables(db)
 	flag.Parse()
 	log.SetFlags(0)
-	http.HandleFunc("/broadcast", s.broadcast)
+	http.HandleFunc("/websocket", s.socketHandler)
 	http.HandleFunc("/channel", s.getChannelMessages)
 	log.Fatal(http.ListenAndServe(*addr, nil))
 
